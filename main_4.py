@@ -109,18 +109,6 @@ def preprocess(state):
     return state.astype(np.float32)
 
 
-def stack_frames(frame, stacked_frames, is_new_episode):
-
-    if is_new_episode:
-        stacked_frames = deque(
-            [np.zeros(80, 80, dtype=np.float32)] * AGENT_HISTORY_LENGTH,
-            maxlen=AGENT_HISTORY_LENGTH,
-        )
-        stacked_frames.append(frame)
-        stacked_state = np.stack(stacked_frames, axis=0)
-        return stacked_state, stacked_frames
-
-
 def main():
 
     env = gym.make("Pong-v4", render_mode="rgb_array")
@@ -191,10 +179,15 @@ def main():
                 agent.optimizer.zero_grad()
                 loss.backward()
                 agent.optimizer.step()
+                # env.render()
 
         episode_rewards.append(episode_reward)
         if episode % TARGET_UPDATE_FREQ == 0:
             agent.update_target_net()  # Copy over the network on a given interval
+
+    torch.save(agent.policy_net.state_dict(), "/model")
+    torch.save(agent.target_net.state_dict(), "/model")
+
     return
 
 
