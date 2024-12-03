@@ -61,16 +61,14 @@ class DQN(nn.Module):
     def __init__(self, n_actions):  # Input image, must undergo downsampling
         super(DQN, self).__init__()
         self.layers = nn.Sequential(
-            nn.Conv2d(4, 32, 8, stride=4),
+            nn.Conv2d(4, 16, 8, stride=4),
             nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, 3, stride=1),
+            nn.Conv2d(16, 32, 4, stride=2),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(64 * 7 * 7, 512),
+            nn.Linear(2048, 256),
             nn.ReLU(),
-            nn.Linear(512, n_actions),
+            nn.Linear(256, n_actions),
         )
 
     def forward(self, x):
@@ -119,6 +117,14 @@ def preprocess(state):
     return state.astype(np.float32)
 
 
+def visualize_stacked_frames(stacked_frames):
+    fig, axes = plt.subplots(1, len(stacked_frames), figsize=(12, 3))
+    for idx, frame in enumerate(stacked_frames):
+        axes[idx].imshow(frame, cmap="gray")
+        axes[idx].axis("off")
+    plt.show()
+
+
 def shouldrecord(reward, best_reward):
 
     if reward >= best_reward:
@@ -130,18 +136,17 @@ def shouldrecord(reward, best_reward):
 def save_checkpoint(agent, episode, checkpoint_dir="./checkpoints"):
     if not os.path.exists(checkpoint_dir):
         os.makedirs(checkpoint_dir)
-
-    checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{episode}.pth")
-    torch.save(
-        {
-            "episode": episode,
-            "policy_net_state_dict": agent.policy_net.state_dict(),
-            "target_net_state_dict": agent.target_net.state_dict(),
-            "optimizer_state_dict": agent.optimizer.state_dict(),
-        },
-        checkpoint_path,
-    )
-    print(f"Checkpoint saved at episode {episode}")
+        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{episode}.pth")
+        torch.save(
+            {
+                "episode": episode,
+                "policy_net_state_dict": agent.policy_net.state_dict(),
+                "target_net_state_dict": agent.target_net.state_dict(),
+                "optimizer_state_dict": agent.optimizer.state_dict(),
+            },
+            checkpoint_path,
+        )
+        print(f"Checkpoint saved at episode {episode}")
 
 
 def load_checkpoint(agent, checkpoint_path):
@@ -186,7 +191,7 @@ def main():
 
     for episode in range(start_episode, MAX_EPISODES):
         state, _ = env.reset()
-        state = preprocess(state) / 255.0
+        state = preprocess(state)
 
         # Initialize the frame stack (stack 4 frames)
         frame_stack = deque(
@@ -205,11 +210,11 @@ def main():
             )  # Decay the exploration
             action = agent.take_action(stacked_state)
             next_state, reward, done, _, _ = env.step(action)
-            reward = np.clip(reward, -1, 1)  # Reward clipping
             next_state = preprocess(next_state)
             frame_stack.append(next_state)
             stacked_next_state = np.stack(frame_stack, axis=0)
             agent.rm.push(stacked_state, action, reward, stacked_next_state, done)
+            visualize_stacked_frames(stacked_next_state)
             stacked_state = stacked_next_state
             episode_reward += reward
 

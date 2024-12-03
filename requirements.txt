@@ -6,7 +6,7 @@ scikit-learn>=1.2.0
 gymnasium>=0.29.0
 pygame
 gym-super-mario-bros
-gymnasium[atari, accept-rom-license]
+gymnasium[atari, accept-rom-license, other]
 
 
 # Platform-specific PyTorch installations
