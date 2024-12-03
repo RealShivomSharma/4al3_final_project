@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import ale_py
 import random
 import os
+import time
 from torch.utils.tensorboard import SummaryWriter
 from collections import deque
 
@@ -15,6 +16,14 @@ ACTION_MAP = {
     0: "NOOP",
     4: "RIGHTFIRE",
     5: "LEFTFIRE",
+} # REDUCED SELECTION THESE SHOULD BE ONLY MOVES REQUIRED TO PLAY (FIRE NEEDED TO RESET/START ATARI ENVIRONMENT)
+COMPLETE_ACTION_MAP = {
+    0:"NOOP",
+    1:"FIRE",
+    2:"RIGHT",
+    3:"LEFT",
+    4:"RIGHTFIRE",
+    5:"LEFTFIRE",
 }
 MEAN_GOAL_REWARD = 19.5  # Final score goal over evaluations
 MAX_EPISODES = 10_000  # Max number of episodes to iterate over
@@ -61,16 +70,16 @@ class DQN(nn.Module):
     def __init__(self, n_actions):  # Input image, must undergo downsampling
         super(DQN, self).__init__()
         self.layers = nn.Sequential(
-            nn.Conv2d(4, 32, 8, stride=4),
+            nn.Conv2d(4, 16, 8, stride=4),
             nn.ReLU(),
-            nn.Conv2d(32, 64, 4, stride=2),
+            nn.Conv2d(16, 32, 4, stride=2),
             nn.ReLU(),
-            nn.Conv2d(64, 64, 3, stride=1),
+            # nn.Conv2d(64, 64, 3, stride=1),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(64 * 7 * 7, 512),
+            nn.Linear(2048, 256),
             nn.ReLU(),
-            nn.Linear(512, n_actions),
+            nn.Linear(256, n_actions),
         )
 
     def forward(self, x):
@@ -99,15 +108,15 @@ class Agent:
     def take_action(self, state):  # Greedy policy
 
         if np.random.random() < self.epsilon:  # Greedy action
-            return np.random.choice(list(ACTION_MAP.keys()))
+            return np.random.choice(list(ACTION_MAP.keys())) # Reduced action set to the ones that "matter" to us
 
-        with torch.no_grad():
-            state = torch.tensor(state, device=self.device).unsqueeze(0)
-            q_values = self.policy_net(state)
-            return q_values.argmax().item()
+        with torch.no_grad(): # Without updating the gradients
+            state = torch.tensor(state, device=self.device).unsqueeze(0) # Conver the state to a tensor 
+            q_values = self.policy_net(state) # pass it to the policy to grab the q value
+            return q_values.argmax().item() # Get the max q value from the network
 
     def update_target_net(self):
-        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.load_state_dict(self.policy_net.state_dict()) # Copy over the policy to the target network done accordingly with TARGET_UPDATE_FREQ
 
 
 def preprocess(state):
@@ -117,14 +126,6 @@ def preprocess(state):
     state[state == 109] = 0  # Erase background (background type 2)
     state[state != 0] = 1  # Set everything else (paddles, ball) to 1
     return state.astype(np.float32)
-
-
-def shouldrecord(reward, best_reward):
-
-    if reward >= best_reward:
-        return True
-    else:
-        return False
 
 
 def save_checkpoint(agent, episode, checkpoint_dir="./checkpoints"):
@@ -157,10 +158,12 @@ def main():
     writer = SummaryWriter()
     env = gym.make("ALE/Pong-v5", render_mode="rgb_array")
     trigger = False
+
+    episode_trigger = lambda episode : episode % 100 == 0
     env = gym.wrappers.RecordVideo(
-        env, video_folder="./videos", episode_trigger=trigger, disable_logger=True
+        env, video_folder="./videos", episode_trigger=episode_trigger, disable_logger=True
     )
-    device = "mps"
+    device = "cuda"
     rm = ReplayMemory(capacity=50_000)
     # agent = Agent(env, rm, n_actions=env.action_space.n, device="cpu")
     start_episode = 1
@@ -173,7 +176,14 @@ def main():
         device=device,
         epsilon=EPSILON_START,
     )
-
+    action_counts = {
+        "NOOP": 0,
+        "FIRE": 0,
+        "RIGHT": 0,
+        "LEFT": 0,
+        "RIGHTFIRE": 0,
+        "LEFTFIRE": 0,
+    }
     if os.path.exists(checkpoint_dir) and RESUME_TRAINING:
         checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pth")]
         if checkpoints:
@@ -183,8 +193,11 @@ def main():
             checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
             load_checkpoint(agent, checkpoint_path)
             start_episode = int(latest_checkpoint.split("_")[1].split(".")[0]) + 1
-
+    
+    loss_count = 0
+    running_loss = 0.0
     for episode in range(start_episode, MAX_EPISODES):
+        time_start = time.time()
         state, _ = env.reset()
         state = preprocess(state) / 255.0
 
@@ -204,6 +217,8 @@ def main():
                 EPSILON_MIN, agent.epsilon - epsilon_decay
             )  # Decay the exploration
             action = agent.take_action(stacked_state)
+            action_name = COMPLETE_ACTION_MAP.get(action)
+            action_counts[action_name] +=1
             next_state, reward, done, _, _ = env.step(action)
             reward = np.clip(reward, -1, 1)  # Reward clipping
             next_state = preprocess(next_state)
@@ -217,17 +232,17 @@ def main():
                 batch = agent.rm.sample(BATCH_SIZE)
                 states, actions, rewards, next_states, dones = batch
 
-                states = torch.tensor(states, device=device)
-                actions = torch.tensor(actions, device=device)
-                rewards = torch.tensor(rewards, device=device)
-                next_states = torch.tensor(next_states, device=device)
+                states = torch.tensor(states, device=device,dtype=torch.float32)
+                actions = torch.tensor(actions, device=device,dtype=torch.int64)
+                rewards = torch.tensor(rewards, device=device,dtype=torch.float32)
+                next_states = torch.tensor(next_states, device=device,dtype=torch.float32)
                 dones = torch.tensor(dones, device=device, dtype=torch.bool)
 
                 # print(episode_reward)
 
                 # Compute Q values for current states
                 q_values = (
-                    agent.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+                    agent.policy_net(states).gather(1, actions.unsqueeze(1).to(torch.int64)).squeeze(1)
                 )
 
                 # Compute Q values for next states
@@ -240,24 +255,44 @@ def main():
                 # Compute loss
                 loss = F.mse_loss(q_values, target_q_values)
 
-                writer.add_scalar("Loss/Episode", loss, episode)
+                running_loss += loss.item()
+                loss_count +=1
+
 
                 # Optimize the model
                 agent.optimizer.zero_grad()
                 loss.backward()
                 agent.optimizer.step()
+
+                writer.add_scalar("TargetQ-Value/Action", target_q_values.max().item(), episode) 
+                writer.add_scalar("Q-Value/Action", q_values.max().item(), episode)
+                writer.add_scalar("Loss/Episode", loss, episode)
                 # env.render()
+ 
+        time_end = time.time()
+        avg_loss = running_loss / loss_count if loss_count > 0 else 0 
+        writer.add_scalar("Epsilon/Episode", agent.epsilon, episode)
+        writer.add_scalar("Loss/Running_Avg", avg_loss, episode)
         writer.add_scalar("Reward/Episode", episode_reward, episode)
+        writer.add_scalar("Time/Episode", time_end-time_start, episode)
+        writer.add_scalar("AvgReward/Last100Episodes", np.mean(episode_rewards[-100:]), episode)
+        writer.add_scalars("Action/Distribution", action_counts, episode)
+        action_counts = {action: 0 for action in action_counts.keys()}  # Reset action counts
+        running_loss = 0.0
+        loss_count = 0
         writer.flush()
         episode_rewards.append(episode_reward)
         if episode % TARGET_UPDATE_FREQ == 0:
             save_checkpoint(agent, episode, checkpoint_dir)
             agent.update_target_net()  # Copy over the network on a given interval
 
+
         writer.close()
+        env.close()
 
     torch.save(agent.policy_net.state_dict(), "./models/model_policy.pth")
     torch.save(agent.target_net.state_dict(), "./models/model_target.pth")
+    env.close()
 
     return
 
