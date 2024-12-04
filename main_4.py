@@ -12,6 +12,13 @@ import time
 from torch.utils.tensorboard import SummaryWriter
 from collections import deque
 
+# TODO 
+# TESTING FUNCTIONS 
+# TRAINING (PUT MAIN LOOP STUFF INTO FUNCTION)
+# CODE CLEANUP
+# ADD LOADING IN FROM MODEL (i.e. COMPLETED MODEL)
+# ADD PLOTTING FOR METRICS/PRINTING OF METRICS FOR MILESTONE #2
+
 ACTION_MAP = {
     0: "NOOP",
     4: "RIGHTFIRE",
@@ -25,7 +32,7 @@ COMPLETE_ACTION_MAP = {
     4:"RIGHTFIRE",
     5:"LEFTFIRE",
 }
-MEAN_GOAL_REWARD = 19.5  # Final score goal over evaluations
+MEAN_GOAL_REWARD = 16  # Final score goal over evaluations
 MAX_EPISODES = 10_000  # Max number of episodes to iterate over
 GAMMA = 0.99  # Discount factor
 BATCH_SIZE = 32  # Batch Size
@@ -34,11 +41,12 @@ RANDOM_SEED = 42  # RANDOM SEED TO ENSURE CONSISTENCY
 TRAIN = False  # Global flag to enable training
 AGENT_HISTORY_LENGTH = 4  # Number of frames to stack as input to network
 EPSILON_START = 1.0
-EPSILON_MIN = 0.2
+EPSILON_MIN = 0.01
 EPSILON_DECAY_FACTOR = 10**5
-MIN_REPLAY_SIZE = 1000  # Define a minimum replay size
-TARGET_UPDATE_FREQ = 100
-RESUME_TRAINING = True
+MIN_REPLAY_SIZE = 10_000  # Define a minimum replay size
+TARGET_UPDATE_FREQ = 1000
+PRINT_STATS_INTERVAL = 100
+RESUME_TRAINING = False
 
 
 class ReplayMemory:
@@ -70,16 +78,16 @@ class DQN(nn.Module):
     def __init__(self, n_actions):  # Input image, must undergo downsampling
         super(DQN, self).__init__()
         self.layers = nn.Sequential(
-            nn.Conv2d(4, 16, 8, stride=4),
+            nn.Conv2d(4, 32, 8, stride=4),
             nn.ReLU(),
-            nn.Conv2d(16, 32, 4, stride=2),
+            nn.Conv2d(32, 64, 4, stride=2),
             nn.ReLU(),
-            # nn.Conv2d(64, 64, 3, stride=1),
+            nn.Conv2d(64, 64, 3, stride=1),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(2048, 256),
+            nn.Linear(6 * 6 * 64, 512), # Hidden layer size (MAYBE MAKE THIS A VARIABLE)
             nn.ReLU(),
-            nn.Linear(256, n_actions),
+            nn.Linear(512, n_actions),
         )
 
     def forward(self, x):
@@ -109,11 +117,11 @@ class Agent:
 
         if np.random.random() < self.epsilon:  # Greedy action
             return np.random.choice(list(ACTION_MAP.keys())) # Reduced action set to the ones that "matter" to us
-
-        with torch.no_grad(): # Without updating the gradients
-            state = torch.tensor(state, device=self.device).unsqueeze(0) # Conver the state to a tensor 
-            q_values = self.policy_net(state) # pass it to the policy to grab the q value
-            return q_values.argmax().item() # Get the max q value from the network
+        else:
+            with torch.no_grad(): # Without updating the gradients
+                state = torch.tensor(state, device=self.device).unsqueeze(0) # Conver the state to a tensor 
+                q_values = self.policy_net(state) # pass it to the policy to grab the q value
+                return q_values.argmax().item() # Get the max q value from the network
 
     def update_target_net(self):
         self.target_net.load_state_dict(self.policy_net.state_dict()) # Copy over the policy to the target network done accordingly with TARGET_UPDATE_FREQ
@@ -142,6 +150,9 @@ def save_checkpoint(agent, episode, checkpoint_dir="./checkpoints"):
         },
         checkpoint_path,
     )
+
+    epsilons = np.array(epsilons)
+
     print(f"Checkpoint saved at episode {episode}")
 
 
@@ -153,22 +164,35 @@ def load_checkpoint(agent, checkpoint_path):
     agent.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     print(f"Checkpoint loaded from {checkpoint_path}")
 
+def test():
+
+    pass
+
+
+def train():
+
+    pass
 
 def main():
-    writer = SummaryWriter()
-    env = gym.make("ALE/Pong-v5", render_mode="rgb_array")
-    trigger = False
-
-    episode_trigger = lambda episode : episode % 100 == 0
+    # writer = SummaryWriter()
+    env = gym.make("PongNoFrameskip-v4", render_mode="rgb_array")
+    env = gym.wrappers.FrameStackObservation(env, 4)
+    episode_trigger = lambda episode: episode % 100 == 0 
     env = gym.wrappers.RecordVideo(
         env, video_folder="./videos", episode_trigger=episode_trigger, disable_logger=True
     )
-    device = "cuda"
+    seed = 31
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")) # Dynamically get device 
     rm = ReplayMemory(capacity=50_000)
     # agent = Agent(env, rm, n_actions=env.action_space.n, device="cpu")
-    start_episode = 1
     checkpoint_dir = "./checkpoints"
     episode_rewards = []  # Grab the rewards from each episode
+    best_reward = float('-inf')
     agent = Agent(
         env,
         rm,
@@ -193,21 +217,33 @@ def main():
             checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
             load_checkpoint(agent, checkpoint_path)
             start_episode = int(latest_checkpoint.split("_")[1].split(".")[0]) + 1
-    
+            if hasattr(env, 'episode_id'):
+                env.episode_id = start_episode  # Sync episode_id with the loaded checkpoint
+    else:
+        start_episode=1
+    print(f"STARTING FROM {start_episode}")
     loss_count = 0
     running_loss = 0.0
+    epsilons = []
+    losses = []
+    rewards = []
+    AvgReward = []
+    timestep = 0
     for episode in range(start_episode, MAX_EPISODES):
+        episode_length = 1
+        episode_reward = 0
         time_start = time.time()
+        # print(env.reset())
         state, _ = env.reset()
         state = preprocess(state) / 255.0
 
         # Initialize the frame stack (stack 4 frames)
-        frame_stack = deque(
-            [np.zeros_like(state) for _ in range(AGENT_HISTORY_LENGTH)],
-            maxlen=AGENT_HISTORY_LENGTH,
-        )
-        frame_stack.append(state)
-        stacked_state = np.stack(frame_stack, axis=0)
+        # frame_stack = deque(
+        #     [np.zeros_like(state) for _ in range(AGENT_HISTORY_LENGTH)],
+        #     maxlen=AGENT_HISTORY_LENGTH,
+        # )
+        # frame_stack.append(state)
+        # stacked_state = np.stack(frame_stack, axis=0)
 
         done = False
         episode_reward = 0.0
@@ -220,6 +256,7 @@ def main():
             action_name = COMPLETE_ACTION_MAP.get(action)
             action_counts[action_name] +=1
             next_state, reward, done, _, _ = env.step(action)
+            episode_length +=1 
             reward = np.clip(reward, -1, 1)  # Reward clipping
             next_state = preprocess(next_state)
             frame_stack.append(next_state)
@@ -253,41 +290,35 @@ def main():
                 target_q_values = rewards + (GAMMA * next_q_values * (~dones))
 
                 # Compute loss
-                loss = F.mse_loss(q_values, target_q_values)
-
-                running_loss += loss.item()
-                loss_count +=1
+                loss = F.smooth_l1_loss(q_values, target_q_values) # Huber loss
 
 
                 # Optimize the model
                 agent.optimizer.zero_grad()
+                for param in agent.train_net.parameters():
+                    param.grad.data.clamp_(-1, 1) # Clamp gradients at -1 and 1 
                 loss.backward()
                 agent.optimizer.step()
 
-                writer.add_scalar("TargetQ-Value/Action", target_q_values.max().item(), episode) 
-                writer.add_scalar("Q-Value/Action", q_values.max().item(), episode)
-                writer.add_scalar("Loss/Episode", loss, episode)
-                # env.render()
+                timestep+=1
+
+                if episode % PRINT_STATS_INTERVAL == 0:
+                    print(f"Episode {episode} , Timestep {timestep}, Average Total Reward / 100 Episodes {np.mean(episode_rewards[-100:]):.1f}, Episode Length = {np.mean(episode_length[-100:]):.1f} , Loss {loss.item()})")
  
-        time_end = time.time()
-        avg_loss = running_loss / loss_count if loss_count > 0 else 0 
-        writer.add_scalar("Epsilon/Episode", agent.epsilon, episode)
-        writer.add_scalar("Loss/Running_Avg", avg_loss, episode)
-        writer.add_scalar("Reward/Episode", episode_reward, episode)
-        writer.add_scalar("Time/Episode", time_end-time_start, episode)
-        writer.add_scalar("AvgReward/Last100Episodes", np.mean(episode_rewards[-100:]), episode)
-        writer.add_scalars("Action/Distribution", action_counts, episode)
         action_counts = {action: 0 for action in action_counts.keys()}  # Reset action counts
         running_loss = 0.0
         loss_count = 0
-        writer.flush()
         episode_rewards.append(episode_reward)
         if episode % TARGET_UPDATE_FREQ == 0:
             save_checkpoint(agent, episode, checkpoint_dir)
             agent.update_target_net()  # Copy over the network on a given interval
+        
+        if np.mean(episode_rewards[-100:]) > MEAN_GOAL_REWARD:
+            env.close()
+            break
 
-
-        writer.close()
+            # reward reaches 19 18 etc 
+        
         env.close()
 
     torch.save(agent.policy_net.state_dict(), "./models/model_policy.pth")
