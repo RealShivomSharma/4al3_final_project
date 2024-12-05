@@ -12,11 +12,11 @@ MAX_EPISODES = 2000
 MAX_STEPS_PER_EPISODE = 3000
 LAMBDA = 0.95
 GAMMA = 0.99
-LEARNING_RATE = 3e-4
+LEARNING_RATE = 1e-4
 VALUE_LOSS = 0.5
 ENTROPY_COEF = 0.01
 EPOCHS = 3
-MINI_BATCH_SIZE = 512
+MINI_BATCH_SIZE = 256
 CLIP_RANGE = 0.2
 torch.autograd.set_detect_anomaly(True)
 
@@ -51,8 +51,8 @@ class Agent:
         state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            logits, value = self.policy_net(state)
-            dist = Categorical(logits=logits)
+            policy, value = self.policy_net(state)
+            dist = Categorical(policy)
             action = dist.sample()
             log_prob = dist.log_prob(action)
 
@@ -100,8 +100,8 @@ class Agent:
                 batch_advantages = batch_advantages.to(self.device)
 
                 # Compute log probabilities and ratio
-                logits, values = self.policy_net(batch_states)
-                dist = Categorical(logits=logits)
+                policy, values = self.policy_net(batch_states)
+                dist = Categorical(policy)
                 log_probs = dist.log_prob(batch_actions)
 
                 # Clamp log ratio values before applying exp
@@ -211,14 +211,11 @@ class PolicyNet(nn.Module):
         x = self.flatten(x)
         x = F.relu(self.fc(x))
 
-        logits = self.policy_head(x)
+        policy = F.softmax(self.policy_head(x), dim=1)
+        policy = torch.clamp(policy, min=1e-8, max=1 - 1e-8)
         value = self.value_head(x)
 
-        # policy = F.softmax(self.policy_head(x), dim=1)
-        # policy = torch.clamp(policy, min=1e-8, max=1 - 1e-8)
-        # value = self.value_head(x)
-
-        return logits, value
+        return policy, value
 
 
 def preprocess(state):
@@ -236,7 +233,7 @@ def get_convolutional_output_size(size, kernel, stride):
 
 
 def train():
-    env = gym.make("PongDeterministic-v4", render_mode="rgb_array")
+    env = gym.make("PongNoFrameskip-v4", render_mode="rgb_array")
     env = gym.wrappers.FrameStackObservation(env, 2)  # Stack 4 observations
     state, _ = env.reset()
 
@@ -249,7 +246,7 @@ def train():
         entropy_coef=ENTROPY_COEF,
         epochs=EPOCHS,
         mini_batch_size=MINI_BATCH_SIZE,
-        device=torch.device("mps"),
+        device=torch.device("cuda"),
     )
 
     total_rewards = []
@@ -269,7 +266,6 @@ def train():
             action, log_prob, value = agent.take_action(state)
 
             next_state, reward, done, _, _ = env.step(action)
-            reward = np.sign(reward)
             next_state = preprocess(next_state)
 
             states.append(state)
@@ -295,39 +291,75 @@ def train():
             old_log_probs=np.array(log_probs),
             returns=returns,
             advantages=advantages,
-        )
+        ) 
 
         total_rewards.append(sum(episode_rewards))
         # returns.append(returns)
         # advantages.append(advantages)
 
         average_rewards = np.mean(total_rewards[-100:])
-        print(
-            f"Episode {episode}: Total Reward = {sum(episode_rewards)} Average Reward = {average_rewards}"
-        )
-
+        print(f"Episode {episode}: Total Reward = {sum(episode_rewards)} Average Reward = {average_rewards}")
+        
         if episode % 100 == 0:
             torch.save(agent.policy_net.state_dict(), "./models/ppo/model_policy.pth")
             torch.save(agent.optimizer.state_dict(), "./models/ppo/optimizer.pth")
-            plt.plot(total_rewards, label="Total Reward / Episode")
-            plt.show()
+            plt.plot(total_rewards, label='Total Reward / Episode')
             env.render()
-
+        
         if average_rewards >= 5:
             torch.save(agent.policy_net.state_dict(), "./models/ppo/model_policy.pth")
             torch.save(agent.optimizer.state_dict(), "./models/ppo/optimizer.pth")
-            plt.plot(total_rewards, label="Total Reward / Episode")
-            plt.savefig("donetrainingppo")
+            plt.plot(total_rewards, label='Total Reward / Episode')
+            plt.savefig('donetrainingppo')
             return
+
 
     env.close()
 
     return
 
 
+
+def evaluate_model():
+    env = gym.make("PongNoFrameskip-v4")
+    env = gym.wrappers.FrameStackObservation(env, 2)  # Stack 4 observations
+    state, _ = env.reset()
+    agent = Agent(
+        input_shape=preprocess(state).shape,
+        n_actions=env.action_space.n,
+        learning_rate=LEARNING_RATE,
+        clip_range=CLIP_RANGE,
+        value_loss_coef=VALUE_LOSS,
+        entropy_coef=ENTROPY_COEF,
+        epochs=EPOCHS,
+        mini_batch_size=MINI_BATCH_SIZE,
+        device=torch.device("cuda"),
+    )
+    model = torch.load("./models/ppo/model_policy.pth")
+    optimizer = torch.load("./models/ppo/optimizer.pth")
+    agent.policy_net.load_state_dict(model)
+    agent.optimizer.load_state_dict(optimizer)
+
+
+    total_reward = 0 
+    for _  in range(10):
+        state, _ = env.reset()
+        env.render()
+        done = False
+        while not done:
+            state = preprocess(state)
+            action, _, _ = agent.take_action(state)
+            next_state, reward, done, _, _ = env.step(action)
+            total_reward += reward
+            state = next_state
+    
+    return total_reward / 10
+
+
 def main():
 
-    train()
+    # train( 
+    evaluate_model()
 
     pass
 
