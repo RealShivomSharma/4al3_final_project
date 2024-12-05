@@ -16,7 +16,7 @@ LEARNING_RATE = 1e-4
 VALUE_LOSS = 0.5
 ENTROPY_COEF = 0.01
 EPOCHS = 3
-MINI_BATCH_SIZE = 64
+MINI_BATCH_SIZE = 256
 CLIP_RANGE = 0.2
 torch.autograd.set_detect_anomaly(True)
 
@@ -233,10 +233,8 @@ def get_convolutional_output_size(size, kernel, stride):
 
 
 def train():
-
-    env = gym.make("Pong-v4", render_mode="rgb_array")
-    env = gym.wrappers.FrameStackObservation(env, 4)  # Stack 4 observations
-
+    env = gym.make("PongNoFrameskip-v4", render_mode="rgb_array")
+    env = gym.wrappers.FrameStackObservation(env, 2)  # Stack 4 observations
     state, _ = env.reset()
 
     agent = Agent(
@@ -248,8 +246,14 @@ def train():
         entropy_coef=ENTROPY_COEF,
         epochs=EPOCHS,
         mini_batch_size=MINI_BATCH_SIZE,
-        device=torch.device("mps"),
+        device=torch.device("cuda"),
     )
+
+    total_rewards = []
+    value_loss = []
+    entropy_loss = []
+    advantages = []
+    returns = []
 
     for episode in range(MAX_EPISODES):
         state, _ = env.reset()
@@ -277,28 +281,85 @@ def train():
             if done:
                 break
 
-            advantages, returns = agent.compute_advantage(rewards, values, dones)
+        # Compute advantages and returns after the episode
+        advantages, returns = agent.compute_advantage(rewards, values, dones)
 
-            agent.update(
-                states=np.array(states),
-                actions=np.array(actions),
-                old_log_probs=np.array(log_probs),
-                returns=returns,
-                advantages=advantages,
-            )
+        # Update the agent with the collected trajectories
+        agent.update(
+            states=np.array(states),
+            actions=np.array(actions),
+            old_log_probs=np.array(log_probs),
+            returns=returns,
+            advantages=advantages,
+        ) 
 
-            print(f"Episode {episode}: Total Reward = {sum(episode_rewards)}")
-            if episode % 100 == 0:
-                env.render()
+        total_rewards.append(sum(episode_rewards))
+        # returns.append(returns)
+        # advantages.append(advantages)
 
-            env.close()
+        average_rewards = np.mean(total_rewards[-100:])
+        print(f"Episode {episode}: Total Reward = {sum(episode_rewards)} Average Reward = {average_rewards}")
+        
+        if episode % 100 == 0:
+            torch.save(agent.policy_net.state_dict(), "./models/ppo/model_policy.pth")
+            torch.save(agent.optimizer.state_dict(), "./models/ppo/optimizer.pth")
+            plt.plot(total_rewards, label='Total Reward / Episode')
+            env.render()
+        
+        if average_rewards >= 5:
+            torch.save(agent.policy_net.state_dict(), "./models/ppo/model_policy.pth")
+            torch.save(agent.optimizer.state_dict(), "./models/ppo/optimizer.pth")
+            plt.plot(total_rewards, label='Total Reward / Episode')
+            plt.savefig('donetrainingppo')
+            return
+
+
+    env.close()
 
     return
 
 
+
+def evaluate_model():
+    env = gym.make("PongNoFrameskip-v4")
+    env = gym.wrappers.FrameStackObservation(env, 2)  # Stack 4 observations
+    state, _ = env.reset()
+    agent = Agent(
+        input_shape=preprocess(state).shape,
+        n_actions=env.action_space.n,
+        learning_rate=LEARNING_RATE,
+        clip_range=CLIP_RANGE,
+        value_loss_coef=VALUE_LOSS,
+        entropy_coef=ENTROPY_COEF,
+        epochs=EPOCHS,
+        mini_batch_size=MINI_BATCH_SIZE,
+        device=torch.device("cuda"),
+    )
+    model = torch.load("./models/ppo/model_policy.pth")
+    optimizer = torch.load("./models/ppo/optimizer.pth")
+    agent.policy_net.load_state_dict(model)
+    agent.optimizer.load_state_dict(optimizer)
+
+
+    total_reward = 0 
+    for _  in range(10):
+        state, _ = env.reset()
+        env.render()
+        done = False
+        while not done:
+            state = preprocess(state)
+            action, _, _ = agent.take_action(state)
+            next_state, reward, done, _, _ = env.step(action)
+            total_reward += reward
+            state = next_state
+    
+    return total_reward / 10
+
+
 def main():
 
-    train()
+    # train( 
+    evaluate_model()
 
     pass
 
