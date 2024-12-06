@@ -4,7 +4,7 @@ import ale_py
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
-from train import SimpleMLP, preprocess
+from train import PolicyNet, preprocess
 
 NUM_FRAMES = 2  # Number of frames to stack
 device = torch.device(
@@ -29,7 +29,7 @@ def evaluate_model(model_path="mlp_ppo_pong_model_2.pth", episodes=10):
     n_actions = env.action_space.n
 
     # Load model
-    policy_net = SimpleMLP(input_size, n_actions).to(device)
+    policy_net = PolicyNet(input_size, n_actions).to(device)
     policy_net.load_state_dict(torch.load(model_path, map_location=device))
     policy_net.eval()
 

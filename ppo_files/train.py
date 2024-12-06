@@ -7,21 +7,21 @@ from torch.distributions import Categorical
 import ale_py
 import matplotlib.pyplot as plt
 
-# -------------------------------
-# Hyperparameters (simplified)
-# -------------------------------
+# ------------------------------
+# Hyperparameters
+# ------------------------------
 MAX_EPISODES = 1500
 MAX_STEPS_PER_EPISODE = 1000
 
 # PPO parameters
-GAMMA = 0.99
-LAMBDA = 0.95
+GAMMA = 0.99  # Discount Factor
+LAMBDA = 0.95  # GAE Param => Controls Bias-Variance Trade-off
 LEARNING_RATE = 1e-4
-VALUE_LOSS_COEF = 0.5
-ENTROPY_COEF = 0.01
-EPOCHS = 3
-MINI_BATCH_SIZE = 256
-CLIP_RANGE = 0.2
+VALUE_LOSS_WEIGHT = 0.5  # Measures how much value loss matters in total loss
+ENTROPY_COEF = 0.01  # Entropy bonus for exploring stochastic situations in the policy
+EPOCHS = 3  # How many times data gets passed through the forward/backward passes
+MINI_BATCH_SIZE = 256  # Mini batch size experiemneted with 32, 64, 128 and 256
+CLIP_RANGE = 0.2  #
 
 # Environment Settings
 NUM_FRAMES = 2  # Number of frames to stack
@@ -84,7 +84,7 @@ def preprocess(frames, display=False):
 # Simple MLP Policy-Value Network
 # π(a|s), V(s)
 # -------------------------------
-class SimpleMLP(nn.Module):
+class PolicyNet(nn.Module):
     """
     A simple two-layer MLP that outputs:
     - π(a|s) as a categorical distribution over actions
@@ -94,7 +94,7 @@ class SimpleMLP(nn.Module):
     """
 
     def __init__(self, input_size, n_actions):
-        super(SimpleMLP, self).__init__()
+        super(PolicyNet, self).__init__()
         self.fc1 = nn.Linear(input_size, 256)
         self.fc_policy = nn.Linear(256, n_actions)
         self.fc_value = nn.Linear(256, 1)
@@ -113,7 +113,7 @@ class SimpleMLP(nn.Module):
 # -------------------------------
 # PPO Formula Functions
 # -------------------------------
-def compute_gae(rewards, values, dones, gamma=GAMMA, lam=LAMBDA):
+def compute_gae(rewards, values, dones, gamma=GAMMA, lambda=LAMBDA):
     """
     Compute Generalized Advantage Estimator (GAE)
     A_t = δ_t + (γ * λ) * δ_{t+1} + ... + (γ * λ)^{T-t+1} * δ_{T-1}
@@ -131,11 +131,18 @@ def compute_gae(rewards, values, dones, gamma=GAMMA, lam=LAMBDA):
     # Advantage is computed in reversed order as it depends on previous states
     for t in reversed(range(len(rewards))):
         # Compute delta
+        # we add a 1 - dones[t] to ensure that the states that end up ending the episode aren't considered
+        # gamme + values[t+1] is the discounted value of our next state
+        # We subtract the value of the current state from our immediate reward and the discounted value to get
+        # The difference between our predicted value andthe actual return
+        # This is the delta_t -> temporal difference error 
         delta_t = rewards[t] + gamma * values[t + 1] * (1 - dones[t]) - values[t]
         # Compute advantage based on our parameters
-        advantage = delta_t + gamma * lam * (1 - dones[t]) * advantage
+        advantage = delta_t + gamma * lambda * (1 - dones[t]) * advantage
         # Store the advantage
         advantages[t] = advantage
+        # Our return is considered the total advantage + the value of our current state
+        # R_t = A_t + V(s_t)
         returns[t] = advantage + values[t]
     return advantages, returns
 
@@ -152,6 +159,7 @@ def ppo_clipped_objective(ratio, advantages, clip_range=CLIP_RANGE):
     """
     L^{CLIP} = E[ min(ratio * A, clip(ratio, 1-ε, 1+ε)*A ) ]
     """
+    # We clip everything to 1 or 0, to stabilize our advantage
     clipped_ratio = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range)
     return torch.min(ratio * advantages, clipped_ratio * advantages).mean()
 
@@ -159,6 +167,8 @@ def ppo_clipped_objective(ratio, advantages, clip_range=CLIP_RANGE):
 def value_loss_function(values, returns):
     """
     L^V = (V(s) - R_t)^2
+    Value is a tensor containing our predicted value of states, estimated by the value net
+    Returns is a tensor 
     """
     return (values.squeeze() - returns).pow(2).mean()
 
@@ -166,28 +176,37 @@ def value_loss_function(values, returns):
 def entropy_of_dist(dist):
     """
     H(π) = -Σ π(a|s) log π(a|s)
+    We calculate the entropy of our Categorical distribution,taken over our 
+    batch of states/actions. The final value is the average uncertainty in our 
+    in the action selection of our policy. This allows us to improve our exploration
+    by factoring in our entropy bonus
     """
     return dist.entropy().mean()
 
 
 def train():
+    """Function containing the core logic of training
+    NOTES FOR TRAINING, TRAINING THE MODEL FROM SCRATCH WITH THE 
+    CURRENT HYPERPARAMETERS TAKES APPROXIMATELY 1.5-2.5 hrs on 
+    M3 PRO, and Similar on a RTX 3070 and RTX 3080
+    """
     # Create Pong environment
     env = gym.make("PongDeterministic-v4", render_mode="rgb_array")
     env = gym.wrappers.FrameStackObservation(env, NUM_FRAMES)
 
-    state, _ = env.reset()
-    state = preprocess(state)
-    input_size = np.prod(state.shape)
+    state, _ = env.reset() # Reset and grab the state observation
+    state = preprocess(state) # Preprocess the initial state
+    input_size = np.prod(state.shape) # Flatten the state's shape
     n_actions = env.action_space.n  # Number of available actions => 6
 
     # Initialize network and optimizer
-    policy_net = SimpleMLP(input_size, n_actions).to(device)
-    optimizer = torch.optim.Adam(policy_net.parameters(), lr=LEARNING_RATE)
+    policy_net = PolicyNet(input_size, n_actions).to(device) # Initialize policy_net
+    optimizer = torch.optim.Adam(policy_net.parameters(), lr=LEARNING_RATE) # Initialize optimizer
 
-    total_rewards = []
 
     # Metrics to log
-    policy_losses_per_episode = []
+    total_rewards = [] # Total rewards across episodes
+    policy_losses_per_episode = [] # Policy losses per episode
     value_losses_per_episode = []
     entropies_per_episode = []
     total_losses_per_episode = []
@@ -247,7 +266,8 @@ def train():
         # Normalize advantages
         advantages_t = (advantages_t - advantages_t.mean()) / (
             advantages_t.std() + 1e-8
-        )
+        )  # Avoids division by zero and over-estimation
+        # Also aids in converging faster
 
         # We'll track sums for this episode
         ep_policy_loss = 0.0
@@ -290,7 +310,7 @@ def train():
                 ent = entropy_of_dist(dist)
 
                 # Total PPO loss
-                loss = policy_loss + VALUE_LOSS_COEF * v_loss - ENTROPY_COEF * ent
+                loss = policy_loss + VALUE_LOSS_WEIGHT * v_loss - ENTROPY_COEF * ent
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -338,8 +358,10 @@ def train():
         torch.save(policy_net.state_dict(), "mlp_ppo_pong_model_3.pth")
 
     env.close()
-
-    # Plotting
+# -----------------------
+# Plotting
+# -----------------------
+    # Episode Reward Plot
     plt.figure(figsize=(12, 8))
     plt.subplot(2, 3, 1)
     plt.plot(total_rewards, label="Episode Reward")
@@ -347,30 +369,35 @@ def train():
     plt.xlabel("Episode")
     plt.ylabel("Reward")
 
+    # Policy Loss Plot
     plt.subplot(2, 3, 2)
     plt.plot(policy_losses_per_episode, label="Policy Loss")
     plt.title("Policy Loss")
     plt.xlabel("Episode")
     plt.ylabel("Loss")
 
+    # Value Loss Plot
     plt.subplot(2, 3, 3)
     plt.plot(value_losses_per_episode, label="Value Loss")
     plt.title("Value Loss")
     plt.xlabel("Episode")
     plt.ylabel("Loss")
 
+    # Entropy Plot
     plt.subplot(2, 3, 4)
     plt.plot(entropies_per_episode, label="Entropy")
     plt.title("Policy Entropy")
     plt.xlabel("Episode")
     plt.ylabel("Entropy")
 
+    # Total PPO Loss
     plt.subplot(2, 3, 5)
     plt.plot(total_losses_per_episode, label="Total PPO Loss")
     plt.title("Total PPO Loss")
     plt.xlabel("Episode")
     plt.ylabel("Loss")
 
+    # 100 Episode Average Reward
     plt.subplot(2, 3, 6)
     plt.plot(average_rewards_per_episode, label="Avg(100) Reward")
     plt.title("100-Episode Average Reward")
