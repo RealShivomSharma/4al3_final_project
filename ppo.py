@@ -247,7 +247,7 @@ def train():
         entropy_coef=ENTROPY_COEF,
         epochs=EPOCHS,
         mini_batch_size=MINI_BATCH_SIZE,
-        device=torch.device("cuda"),
+        device=torch.device("mps"),
     )
 
     if LOAD_MODEL:
@@ -255,7 +255,6 @@ def train():
         optimizer = torch.load("./models/ppo/optimizer.pth")
         agent.policy_net.load_state_dict(model)
         agent.optimizer.load_state_dict(optimizer)
-
 
     total_rewards = []
     value_loss = []
@@ -299,102 +298,83 @@ def train():
             old_log_probs=np.array(log_probs),
             returns=returns,
             advantages=advantages,
-        ) 
+        )
 
         total_rewards.append(sum(episode_rewards))
         # returns.append(returns)
         # advantages.append(advantages)
 
         average_rewards = np.mean(total_rewards[-100:])
-        print(f"Episode {episode}: Total Reward = {sum(episode_rewards)} Average Reward = {average_rewards}")
-        
+        print(
+            f"Episode {episode}: Total Reward = {sum(episode_rewards)} Average Reward = {average_rewards}"
+        )
+
         if episode % 100 == 0:
             torch.save(agent.policy_net.state_dict(), "./models/ppo/model_policy_2.pth")
             torch.save(agent.optimizer.state_dict(), "./models/ppo/optimizer_2.pth")
-            plt.plot(total_rewards, label='Total Reward / Episode')
+            plt.plot(total_rewards, label="Total Reward / Episode")
             env.render()
-        
+
         if average_rewards >= 5:
             torch.save(agent.policy_net.state_dict(), "./models/ppo/model_policy_2.pth")
             torch.save(agent.optimizer.state_dict(), "./models/ppo/optimizer_2.pth")
-            plt.plot(total_rewards, label='Total Reward / Episode')
-            plt.savefig('donetrainingppo')
+            plt.plot(total_rewards, label="Total Reward / Episode")
+            plt.savefig("donetrainingppo")
             return
-
 
     env.close()
 
     return
 
 
-
 def evaluate_model():
-    # Correct way to create vectorized environments
-    num_envs = 4  # Number of environments to run in parallel
-    
-    def make_env():
-        env = gym.make("PongNoFrameskip-v4")
-        env = gym.wrappers.FrameStackObservation(env, 4)  # Stack 4 frames
-        return env
-    
-    # Use gym.vector.SyncVectorEnv for correct vectorization
-    env = gym.vector.SyncVectorEnv([make_env for _ in range(num_envs)])
-    
+    # Create a single environment for evaluation
+    env = gym.make("PongDeterministic-v4", render_mode="human")  # Enable rendering
+    env = gym.wrappers.FrameStackObservation(env, 2)  # Stack 4 frames
+
     # Initialize the agent
-    state = env.reset()
+    state, _ = env.reset()
     agent = Agent(
-        input_shape=preprocess(state[0]).shape,
-        n_actions=env.single_action_space.n,
+        input_shape=preprocess(state).shape,
+        n_actions=env.action_space.n,
         learning_rate=LEARNING_RATE,
         clip_range=CLIP_RANGE,
         value_loss_coef=VALUE_LOSS,
         entropy_coef=ENTROPY_COEF,
         epochs=EPOCHS,
         mini_batch_size=MINI_BATCH_SIZE,
-        device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        device=torch.device("mps"),
     )
-    
-    model = torch.load("./models/ppo/model_policy.pth")
-    optimizer = torch.load("./models/ppo/optimizer.pth")
+
+    model = torch.load("./models/ppo/model_policy_2.pth", map_location="mps")
+    optimizer = torch.load("./models/ppo/optimizer_2.pth", map_location="mps")
     agent.policy_net.load_state_dict(model)
     agent.optimizer.load_state_dict(optimizer)
-    
-    # Parallel evaluation
-    total_rewards = np.zeros(num_envs)
-    num_episodes = 10
-    episode_rewards = []
-    active_envs = np.ones(num_envs, dtype=bool)  # Track active environments
-    
-    while len(episode_rewards) < num_episodes:
-        states = preprocess(state)
-        
-        # Ensure correct method signature for take_action
-        actions, log_probs, values = agent.take_action(states)
-        
-        next_states, rewards, dones, truncateds, infos = env.step(actions)
-        
-        # Accumulate rewards and handle completed episodes
-        total_rewards[active_envs] += rewards
-        
-        for i, (done, truncated) in enumerate(zip(dones, truncateds)):
-            if done or truncated:
-                episode_rewards.append(total_rewards[i])
-                total_rewards[i] = 0
-                active_envs[i] = len(episode_rewards) < num_episodes
-        
-        state = next_states
-    
-    # Calculate the mean reward over episodes
-    avg_reward = np.mean(episode_rewards[:num_episodes])
-    print(f"Average Reward: {avg_reward}")
-    return avg_reward
 
+    # Single run with rendering
+    total_reward = 0
+    done = False
+
+    while not done:  # Run only one episode
+        state = preprocess(state)
+
+        # Ensure correct method signature for take_action
+        action, log_prob, value = agent.take_action(state)
+
+        next_state, reward, done, _, _ = env.step(action)
+
+        # Accumulate rewards
+        total_reward += reward
+
+        state = next_state
+
+    print(f"Total Reward: {total_reward}")
+    return total_reward
 
 
 def main():
 
-    train()
-    # evaluate_model()
+    evaluate_model()
 
     pass
 
