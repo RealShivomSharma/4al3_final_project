@@ -9,7 +9,7 @@ import ale_py
 # -------------------------------
 # Hyperparameters (simplified)
 # -------------------------------
-MAX_EPISODES = 500
+MAX_EPISODES = 1500
 MAX_STEPS_PER_EPISODE = 1000
 
 # PPO parameters
@@ -140,7 +140,7 @@ def entropy_of_dist(dist):
 def main():
     # Create Pong environment
     env = gym.make("PongDeterministic-v4", render_mode="rgb_array")
-    env = gym.wrappers.FrameStackObservation(env, 2)
+    env = gym.wrappers.FrameStackObservation(env, 4)
 
     state, _ = env.reset()
     state = preprocess(state)
@@ -254,6 +254,7 @@ def main():
         # Optional early stopping
         if avg_reward >= 5:
             print("Solved Pong!")
+            torch.save(policy_net.state_dict(), "mlp_ppo_pong_model.pth")
             break
 
     env.close()
