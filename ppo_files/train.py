@@ -407,7 +407,7 @@ def train():
     plt.ylabel("Average Reward (100)")
 
     plt.tight_layout()
-    plt.savefig("training_metrics_2.png")
+    plt.savefig("training_metrics.png")
     plt.show()
 
     return
