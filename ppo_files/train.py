@@ -20,7 +20,7 @@ LEARNING_RATE = 1e-4
 VALUE_LOSS_WEIGHT = 0.5  # Measures how much value loss matters in total loss
 ENTROPY_COEF = 0.01  # Entropy bonus for exploring stochastic situations in the policy
 EPOCHS = 3  # How many times data gets passed through the forward/backward passes
-MINI_BATCH_SIZE = 256  # Mini batch size experiemneted with 32, 64, 128 and 256
+MINI_BATCH_SIZE = 256  # Mini batch size experimented with 32, 64, 128 and 256
 CLIP_RANGE = 0.2  #
 
 # Environment Settings
@@ -89,8 +89,9 @@ class PolicyNet(nn.Module):
     A simple two-layer MLP that outputs:
     - π(a|s) as a categorical distribution over actions
     - V(s) as a scalar value.
-
-    Let input s be flattened images.
+    Our input s are the flattened images preprocessed (2x80x80).
+    This model makes use of no convolutional layers to conduct our experiment
+    and is successful in outputting the policy distribution alongside the value
     """
 
     def __init__(self, input_size, n_actions):
@@ -113,7 +114,7 @@ class PolicyNet(nn.Module):
 # -------------------------------
 # PPO Formula Functions
 # -------------------------------
-def compute_gae(rewards, values, dones, gamma=GAMMA, lambda=LAMBDA):
+def compute_gae(rewards, values, dones, gamma=GAMMA, lam=LAMBDA):
     """
     Compute Generalized Advantage Estimator (GAE)
     A_t = δ_t + (γ * λ) * δ_{t+1} + ... + (γ * λ)^{T-t+1} * δ_{T-1}
@@ -135,10 +136,10 @@ def compute_gae(rewards, values, dones, gamma=GAMMA, lambda=LAMBDA):
         # gamme + values[t+1] is the discounted value of our next state
         # We subtract the value of the current state from our immediate reward and the discounted value to get
         # The difference between our predicted value andthe actual return
-        # This is the delta_t -> temporal difference error 
+        # This is the delta_t -> temporal difference error
         delta_t = rewards[t] + gamma * values[t + 1] * (1 - dones[t]) - values[t]
         # Compute advantage based on our parameters
-        advantage = delta_t + gamma * lambda * (1 - dones[t]) * advantage
+        advantage = delta_t + gamma * lam * (1 - dones[t]) * advantage
         # Store the advantage
         advantages[t] = advantage
         # Our return is considered the total advantage + the value of our current state
@@ -168,7 +169,7 @@ def value_loss_function(values, returns):
     """
     L^V = (V(s) - R_t)^2
     Value is a tensor containing our predicted value of states, estimated by the value net
-    Returns is a tensor 
+    Returns is a tensor
     """
     return (values.squeeze() - returns).pow(2).mean()
 
@@ -176,8 +177,8 @@ def value_loss_function(values, returns):
 def entropy_of_dist(dist):
     """
     H(π) = -Σ π(a|s) log π(a|s)
-    We calculate the entropy of our Categorical distribution,taken over our 
-    batch of states/actions. The final value is the average uncertainty in our 
+    We calculate the entropy of our Categorical distribution,taken over our
+    batch of states/actions. The final value is the average uncertainty in our
     in the action selection of our policy. This allows us to improve our exploration
     by factoring in our entropy bonus
     """
@@ -186,27 +187,28 @@ def entropy_of_dist(dist):
 
 def train():
     """Function containing the core logic of training
-    NOTES FOR TRAINING, TRAINING THE MODEL FROM SCRATCH WITH THE 
-    CURRENT HYPERPARAMETERS TAKES APPROXIMATELY 1.5-2.5 hrs on 
+    NOTES FOR TRAINING, TRAINING THE MODEL FROM SCRATCH WITH THE
+    CURRENT HYPERPARAMETERS TAKES APPROXIMATELY 1.5-2.5 hrs on
     M3 PRO, and Similar on a RTX 3070 and RTX 3080
     """
     # Create Pong environment
     env = gym.make("PongDeterministic-v4", render_mode="rgb_array")
     env = gym.wrappers.FrameStackObservation(env, NUM_FRAMES)
 
-    state, _ = env.reset() # Reset and grab the state observation
-    state = preprocess(state) # Preprocess the initial state
-    input_size = np.prod(state.shape) # Flatten the state's shape
+    state, _ = env.reset()  # Reset and grab the state observation
+    state = preprocess(state)  # Preprocess the initial state
+    input_size = np.prod(state.shape)  # Flatten the state's shape
     n_actions = env.action_space.n  # Number of available actions => 6
 
     # Initialize network and optimizer
-    policy_net = PolicyNet(input_size, n_actions).to(device) # Initialize policy_net
-    optimizer = torch.optim.Adam(policy_net.parameters(), lr=LEARNING_RATE) # Initialize optimizer
-
+    policy_net = PolicyNet(input_size, n_actions).to(device)  # Initialize policy_net
+    optimizer = torch.optim.Adam(
+        policy_net.parameters(), lr=LEARNING_RATE
+    )  # Initialize optimizer
 
     # Metrics to log
-    total_rewards = [] # Total rewards across episodes
-    policy_losses_per_episode = [] # Policy losses per episode
+    total_rewards = []  # Total rewards across episodes
+    policy_losses_per_episode = []  # Policy losses per episode
     value_losses_per_episode = []
     entropies_per_episode = []
     total_losses_per_episode = []
@@ -350,17 +352,17 @@ def train():
         # Optional early stopping
         if avg_reward >= 5:
             print("Solved Pong!")
-            torch.save(policy_net.state_dict(), "mlp_ppo_pong_model_3.pth")
+            torch.save(policy_net.state_dict(), "Model.pth")
             break
 
     else:
         # If loop completes without break:
-        torch.save(policy_net.state_dict(), "mlp_ppo_pong_model_3.pth")
+        torch.save(policy_net.state_dict(), "Model.pth")
 
     env.close()
-# -----------------------
-# Plotting
-# -----------------------
+    # -----------------------
+    # Plotting
+    # -----------------------
     # Episode Reward Plot
     plt.figure(figsize=(12, 8))
     plt.subplot(2, 3, 1)

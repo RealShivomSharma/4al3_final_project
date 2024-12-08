@@ -4,7 +4,11 @@ import ale_py
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
-from train import PolicyNet, preprocess
+from Train import PolicyNet, preprocess
+
+"""
+THIS CODE WILL RUN FOR A NUMBER OF EPISODES
+"""
 
 NUM_FRAMES = 2  # Number of frames to stack
 device = torch.device(
@@ -14,7 +18,7 @@ device = torch.device(
 )  # Auto select device to be either NVIDIA Graphics Card, Metal Performance or CPU
 
 
-def evaluate_model(model_path="mlp_ppo_pong_model_2.pth", episodes=10):
+def evaluate_model(model_path="Model.pth", episodes=20):
     """
     Load the saved model and evaluate it for a given number of episodes.
     Print the average reward over these evaluation episodes.
@@ -36,6 +40,10 @@ def evaluate_model(model_path="mlp_ppo_pong_model_2.pth", episodes=10):
     eval_rewards = []
 
     for ep in range(episodes):
+        if ep == 0:
+            env = gym.wrappers.RecordVideo(
+                env, "recordings", episode_trigger=lambda x: x == 0
+            )
         state, _ = env.reset()
         state = preprocess(state)
         done = False
@@ -54,6 +62,7 @@ def evaluate_model(model_path="mlp_ppo_pong_model_2.pth", episodes=10):
             state = next_state
 
         eval_rewards.append(ep_reward)
+        print(f"Episode: {ep} Reward: {ep_reward}")
         avg_eval_reward = np.mean(eval_rewards)
     print(f"Average Evaluation Reward over {episodes} episodes: {avg_eval_reward}")
     env.close()
