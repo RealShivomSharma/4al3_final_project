@@ -19,7 +19,7 @@ device = torch.device(
 )  # Auto select device to be either NVIDIA Graphics Card, Metal Performance or CPU
 
 
-def evaluate_model(model_path="Model.pth", episodes=20):
+def evaluate_model(model_path="Model.pth", episodes=100):
     """
     Load the saved model and evaluate it for a given number of episodes.
     Print the average reward over these evaluation episodes and plot results.

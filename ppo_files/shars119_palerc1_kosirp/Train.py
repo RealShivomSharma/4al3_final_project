@@ -24,7 +24,7 @@ MINI_BATCH_SIZE = 256  # Mini batch size experimented with 32, 64, 128 and 256
 CLIP_RANGE = 0.2  #
 
 # Environment Settings
-NUM_FRAMES = 2  # Number of frames to stack
+NUM_FRAMES = 4  # Number of frames to stack
 
 device = torch.device(
     "cuda"
@@ -46,35 +46,50 @@ def preprocess(frames, display=False):
     Resulting shape ~ (stacked_frames, 80, 80)
     """
     state = np.array(frames)  # shape (stack, H, W, C)
+    NUM_FRAMES = state.shape[0]  # Ensure this reflects the actual number of frames
 
     if display:
-        fig, axes = plt.subplots(1, 5, figsize=(25, 5))
-        axes[0].imshow(state[0], cmap="gray")
-        axes[0].set_title("Original Frame")
+        # Create a figure with 4 subplots for intermediate steps + NUM_FRAMES for final frames
+        fig, axes = plt.subplots(1, 4 + NUM_FRAMES, figsize=(5 * (4 + NUM_FRAMES), 5))
 
-    state = state[:, 35:195]  # crop
+        # Show the first original frame
+        axes[0].imshow(frames[0], cmap="gray")
+        axes[0].set_title("Original Frame")
+        axes[0].axis("off")
+
+    # Crop
+    state = state[:, 35:195]
 
     if display:
         axes[1].imshow(state[0], cmap="gray")
         axes[1].set_title("Cropped Frame")
+        axes[1].axis("off")
 
-    state = state[:, ::2, ::2, 0]  # downsample and take single channel
+    # Downsample (take every second pixel) and take single channel
+    state = state[:, ::2, ::2, 0]
 
     if display:
         axes[2].imshow(state[0], cmap="gray")
         axes[2].set_title("Downsampled Frame")
+        axes[2].axis("off")
 
-    state[state == 144] = 0  # Remove Background
-    state[state == 109] = 0  # Remove Background
-    state[state != 0] = 1  # Set Paddles and Ball to 1 (Binary)
+    # Remove background and binarize
+    state[state == 144] = 0
+    state[state == 109] = 0
+    state[state != 0] = 1
 
     if display:
         axes[3].imshow(state[0], cmap="gray")
         axes[3].set_title("Binarized Frame")
+        axes[3].axis("off")
 
+        # Display all final frames
         for i in range(NUM_FRAMES):
-            axes[4].imshow(state[i], cmap="gray")
-            axes[4].set_title(f"Final Frame {i+1}")
+            axes[4 + i].imshow(state[i], cmap="gray")
+            axes[4 + i].set_title(f"Frame {i+1}")
+            axes[4 + i].axis("off")
+
+        plt.tight_layout()
         plt.show()
 
     return state.astype(np.float32)
@@ -89,7 +104,7 @@ class PolicyNet(nn.Module):
     A simple two-layer MLP that outputs:
     - π(a|s) as a categorical distribution over actions
     - V(s) as a scalar value.
-    Our input s are the flattened images preprocessed (2x80x80).
+    Our input s are the flattened images preprocessed (NUM_FRAMESx80x80).
     This model makes use of no convolutional layers to conduct our experiment
     and is successful in outputting the policy distribution alongside the value
     """
@@ -196,7 +211,7 @@ def train():
     env = gym.wrappers.FrameStackObservation(env, NUM_FRAMES)
 
     state, _ = env.reset()  # Reset and grab the state observation
-    state = preprocess(state)  # Preprocess the initial state
+    state = preprocess(state, True)  # Preprocess the initial state
     input_size = np.prod(state.shape)  # Flatten the state's shape
     n_actions = env.action_space.n  # Number of available actions => 6
 
