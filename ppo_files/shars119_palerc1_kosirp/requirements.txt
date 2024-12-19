@@ -1,0 +1,28 @@
+# PLEASE INSTALL PYTHON VERSION 3.11.9
+numpy>=1.5.0,<2.0.0  # Pin to numpy 1.x for PyTorch compatibility
+pandas>=2.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+scikit-learn>=1.2.0
+gymnasium>=0.29.0
+pygame
+gymnasium[atari, accept-rom-license, other]
+
+
+# Platform-specific PyTorch installations
+--find-links https://download.pytorch.org/whl/torch_stable.html
+
+# Windows with CUDA
+torch===2.2.1+cu121; platform_system == "Windows"
+torchvision===0.17.1+cu121; platform_system == "Windows"
+torchaudio===2.2.1+cu121; platform_system == "Windows"
+
+# macOS (both Intel and Apple Silicon)
+torch===2.2.1; platform_system == "Darwin"
+torchvision===0.17.1; platform_system == "Darwin"
+torchaudio===2.2.1; platform_system == "Darwin"
+
+# Linux with CUDA (GPU Version)
+torch===2.2.1+cu121; platform_system == "Linux"
+torchvision===0.17.1+cu121; platform_system == "Linux"
+torchaudio===2.2.1+cu121; platform_system == "Linux"
