@@ -1,11 +1,10 @@
 import random
+from collections import deque
 
 
 class ReplayBuffer:
     def __init__(self, capacity):
-        self.capacity = capacity
-        self.buffer = []
-        self.position = 0
+        self.buffer = deque(maxlen=capacity)
 
     def push(self, transition):
         if self.capacity < len(self.buffer):
