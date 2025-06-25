@@ -1,3 +1,4 @@
+# PLEASE INSTALL PYTHON VERSION 3.11.9
 numpy>=1.5.0,<2.0.0  # Pin to numpy 1.x for PyTorch compatibility
 pandas>=2.0.0
 matplotlib>=3.7.0
@@ -20,3 +21,8 @@ torchaudio===2.2.1+cu121; platform_system == "Windows"
 torch===2.2.1; platform_system == "Darwin"
 torchvision===0.17.1; platform_system == "Darwin"
 torchaudio===2.2.1; platform_system == "Darwin"
+
+# Linux with CUDA (GPU Version)
+torch===2.2.1+cu121; platform_system == "Linux"
+torchvision===0.17.1+cu121; platform_system == "Linux"
+torchaudio===2.2.1+cu121; platform_system == "Linux"
